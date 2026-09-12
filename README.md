@@ -1,4 +1,4 @@
-# 🌸 Bloom — Organic Audio Visualizer
+# 🌸 Bloom Visualizer — Organic Audio Visualizer
 
 **Bloom** is a zero-dependency, browser-based audio visualizer that transforms sound into a breathing, bioluminescent floral bloom. Built with pure HTML5 Canvas and the Web Audio API, Bloom dynamically translates audio frequencies, transients, and waveform amplitude into multi-layered petals, floating spores, fireflies, and camera physics.
 
