@@ -1,4 +1,4 @@
-# 🌸 Bloom Visualizer — Organic Audio Visualizer
+# 🌸 Bloom — Organic Audio Visualizer
 
 **Bloom** is a zero-dependency, browser-based audio visualizer that transforms sound into a breathing, bioluminescent floral bloom. Built with pure HTML5 Canvas and the Web Audio API, Bloom dynamically translates audio frequencies, transients, and waveform amplitude into multi-layered petals, floating spores, fireflies, and camera physics.
 
@@ -11,7 +11,7 @@
 3. [Step-by-Step Tutorial](#-step-by-step-tutorial)
    - [Method 1: Playing Local Audio Files](#1-playing-local-audio-files)
    - [Method 2: Live Microphone / Line-In Input](#2-live-microphone--line-in-input)
-   - [Method 3: YouTube Music & Spotify Integration *(Coming Soon)*](#3-youtube-music--spotify-integration-coming-soon)
+   - [Method 3: YouTube Music & Spotify Integration (Chrome Extension)](#3-youtube-music--spotify-integration-chrome-extension)
 4. [Interface & Controls Guide](#-interface--controls-guide)
 5. [Keyboard & Mouse Shortcuts](#-keyboard--mouse-shortcuts)
 6. [Technical Architecture](#-technical-architecture)
@@ -38,7 +38,7 @@
   - Ambient twinkling fireflies and floating bokeh lights.
   - Expanding shockwave ripples triggered by bass drops.
 - **Physical Camera Feedback:** Bass-reactive camera thumps, subtle cinematic panning, and transient shake.
-- **Flexible Audio Sources:** Local files (drag & drop or picker), live microphone input, and planned Chrome Extension streaming hooks.
+- **Flexible Audio Sources:** Local files (drag & drop or picker), live microphone input, and YouTube Music / Spotify streaming via the companion Chrome Extension.
 - **Palette Modes:** Switch between dynamic RGB rainbow cycles and cohesive theme tones.
 - **Accessibility Friendly:** Detects `prefers-reduced-motion` to tone down camera shakes and heavy bobbing.
 
@@ -98,20 +98,25 @@ Bloom can visualize live instruments, vocals, voice chats, or ambient room audio
 
 ---
 
-### 3. YouTube Music & Spotify Integration *(Coming Soon)*
+### 3. YouTube Music & Spotify Integration (Chrome Extension)
 
-Bloom includes built-in message receivers for a companion Chrome Extension currently under development.
+Bloom features direct communication listeners designed to sync with YouTube Music and Spotify browser tabs using a companion Chrome Extension.
 
-#### How It Works:
-- The dock includes dedicated **YouTube Music** and **Spotify** connection buttons.
-- Clicking either button opens the respective streaming platform in a new tab.
-- Once the upcoming **Bloom Chrome Extension** is installed:
-  1. Open Bloom in one tab and YouTube Music or Spotify in another.
-  2. Click the Bloom extension icon on the music player tab.
-  3. The extension captures tab audio, extracts frequency bands (Bass, Mid, Treble, RMS, and beat transients), and syncs album art and track metadata directly into Bloom via secure window messaging.
-  4. The background dynamically mirrors the album artwork, and the palette automatically extracts the dominant colors of the album cover!
+#### Setting Up the Extension:
+If you want to set up the extension yourself:
+1. Head over to the **`Extension_link_raw`** folder in this repository.
+2. Inside the **`Extension_link_raw`** folder, you will find the extension source files along with a dedicated `README.md` that provides complete, step-by-step instructions on how to load and configure it in your browser (Developer Mode → "Load unpacked").
 
-> 💡 *Note: Until the Chrome Extension is published, clicking these buttons will launch the streaming web players in a new tab.*
+#### How to Connect Once Installed:
+1. Open `Bloom Visualizer.html` in one browser tab.
+2. Click the **YouTube Music** or **Spotify** button on the Bloom control dock to launch the web player tab.
+3. On the music tab, click the **Bloom extension icon** in your browser toolbar to link audio streaming.
+4. The extension will automatically:
+   - Capture tab audio and analyze live frequency bands (Bass, Mid, Treble, RMS, and beat transients).
+   - Transmit real-time audio analysis data directly to Bloom via secure window messaging.
+   - Extract the currently playing track title and album artwork to project a blurred ambient backdrop.
+   - Automatically adapt Bloom's color scheme to match the dominant colors of the song's album art.
+5. Use Bloom's bottom dock controls to play, pause, or skip tracks directly from the visualizer.
 
 ---
 
@@ -129,12 +134,12 @@ The floating glassmorphism dock at the bottom of the screen auto-hides when you 
 | :--- | :--- | :--- |
 | **Dock Toggle Arrow** | Hide / Show Dock | Collapses the controls to enjoy an unobstructed visualization. |
 | **Upload** (`↑`) | Select Local File | Opens the native file browser dialog. |
-| **Previous / Next** | Track Skipping | Reserved for streaming services via the companion extension. |
-| **Play / Pause** | Playback Toggle | Starts or pauses current local audio file. |
+| **Previous / Next** | Track Skipping | Skips tracks when connected via the companion extension. |
+| **Play / Pause** | Playback Toggle | Starts or pauses current local audio file (or connected streaming tab). |
 | **Microphone** (`🎙`) | Audio Input | Switches input to the live microphone / default audio device. |
 | **Loop** (`🔁`) | Repeat Track | Toggles continuous looping for local tracks. |
-| **YT Music** | Stream Tab Link | Opens YouTube Music *(Extension link coming soon)*. |
-| **Spotify** | Stream Tab Link | Opens Spotify Web Player *(Extension link coming soon)*. |
+| **YT Music** | Stream Tab Link | Connects with YouTube Music tab via the extension in `Extension_link_raw`. |
+| **Spotify** | Stream Tab Link | Connects with Spotify Web Player tab via the extension in `Extension_link_raw`. |
 | **Sensitivity** (`📊`) | Visual Intensity | Cycles between **Calm (0.82x)**, **Balanced (1.0x)**, and **Intense (1.18x)**. |
 | **Theme** (`🎨`) | Color Mode | Switches between dynamic cycling RGB mode and extracted cohesive theme tones. |
 
@@ -249,8 +254,11 @@ Modify the root CSS variables at the top of the file to change default glow and 
   - In Google Chrome, click the **tune icon** or **padlock** to the left of the URL bar and ensure **Microphone** is toggled to **Allow**.
   - Verify that the correct microphone is set as the default device in your operating system sound settings.
 
+#### Q: How do I load the extension in Developer Mode?
+- **Answer:** Refer directly to the `README.md` file located inside the `Extension_link_raw` folder in this repository for detailed step-by-step instructions on enabling Developer Mode and loading the extension unpacked.
+
 #### Q: Can I run this offline?
-- **Answer:** Yes! Bloom has zero external CDN links, web fonts, or remote assets. It functions 100% offline without an internet connection.
+- **Answer:** Yes! Bloom has zero external CDN links, web fonts, or remote assets. It functions 100% offline without an internet connection for local files and microphone input.
 
 #### Q: How do I reduce motion if the camera movement makes me dizzy?
 - **Answer:** Enable **"Reduce motion"** in your operating system accessibility preferences (or emulate `prefers-reduced-motion: reduce` in browser developer tools). Bloom will automatically disable camera shakes, thumps, and heavy oscillations while preserving the blooming petals.
@@ -264,13 +272,11 @@ Modify the root CSS variables at the top of the file to change default glow and 
 - [x] Local file audio playback with time scrubbing & looping
 - [x] Live microphone input stream
 - [x] Beat transient camera recoil & shockwave ripples
-- [ ] **Bloom Chrome Extension (In Progress):**
-  - Instant one-click audio capture from YouTube Music, Spotify, SoundCloud, and Bandcamp tabs.
-  - Automatic extraction of album artwork, track title, and artist name.
-  - Dynamic palette matching based on album art colors.
-- [ ] Custom preset selector (Lotus, Neon Rose, Cyberpunk Sunflower).
-- [ ] WebGL bloom shader mode for hardware-accelerated neon post-processing.
-- [ ] High-resolution canvas screenshot and video recording export.
+- [x] Chrome extension source available in `Extension_link_raw` folder with dedicated setup README
+- [ ] Official Chrome Web Store one-click distribution
+- [ ] Custom preset selector (Lotus, Neon Rose, Cyberpunk Sunflower)
+- [ ] WebGL bloom shader mode for hardware-accelerated neon post-processing
+- [ ] High-resolution canvas screenshot and video recording export
 
 ---
 
