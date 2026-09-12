@@ -1,0 +1,1419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bloom — audio visualizer</title>
+<style>
+  :root{
+    --bg: #090a10;
+    --line: rgba(255,255,255,0.08);
+    --text: #e7e7ec;
+    --text-dim: #6f6f7c;
+    --focus: #ffffff;
+    --accent: hsl(250, 80%, 68%);
+    --edge-hue: 250;
+    --edge-alpha: 0.04;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    overflow: hidden;
+  }
+
+  /* Fixed full-viewport canvas wrapper with subtle scale to prevent white edges during shake */
+  #canvas-wrap {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    will-change: transform, filter;
+    transform-origin: center center;
+  }
+
+  .fade-target { transition: opacity 0.5s ease; }
+
+  #yt-artwork {
+    position: fixed;
+    inset: -8%;
+    width: 116%;
+    height: 116%;
+    background-position: center;
+    background-size: cover;
+    opacity: 0;
+    filter: blur(28px) saturate(0.9) brightness(0.45);
+    transform: scale(1.08);
+    transition: opacity 0.8s ease, background-image 0.8s ease;
+    pointer-events: none;
+    z-index: 1;
+  }
+  #yt-artwork.visible { opacity: 0.2; }
+
+  #edge-glow {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(90deg, hsla(var(--edge-hue), 90%, 62%, var(--edge-alpha)), transparent 13%, transparent 87%, hsla(calc(var(--edge-hue) + 55), 90%, 62%, var(--edge-alpha))),
+      linear-gradient(180deg, hsla(calc(var(--edge-hue) + 25), 90%, 62%, calc(var(--edge-alpha) * 0.72)), transparent 16%, transparent 84%, hsla(calc(var(--edge-hue) - 25), 90%, 62%, calc(var(--edge-alpha) * 0.72)));
+    mix-blend-mode: screen;
+    z-index: 1;
+  }
+
+  /* ---------- Empty state ---------- */
+  #empty {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 20px;
+    transform: translateY(-18%);
+    pointer-events: none;
+    z-index: 2;
+  }
+  #empty.hidden { opacity: 0; pointer-events: none; }
+  #empty h1 { font-size: 18px; font-weight: 500; letter-spacing: 0.02em; color: var(--text); margin: 0; }
+  #empty p { font-size: 13px; color: var(--text-dim); margin: 0; max-width: 280px; line-height: 1.5; }
+  .empty-actions { display: flex; gap: 10px; pointer-events: auto; margin-top: 6px; }
+
+  /* ---------- Track label ---------- */
+  #track-label {
+    position: fixed;
+    top: 24px;
+    left: 26px;
+    font-size: 12px;
+    color: var(--text-dim);
+    opacity: 0;
+    max-width: 60vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    letter-spacing: 0.03em;
+    z-index: 2;
+  }
+
+  /* ---------- Bottom cluster (scrub + dock) ---------- */
+  #bottom-cluster {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    opacity: 0.35;
+    transition: opacity 0.35s ease;
+    z-index: 2;
+  }
+  #bottom-cluster:hover, #bottom-cluster:focus-within, #bottom-cluster.active { opacity: 1; }
+  #bottom-cluster.collapsed #dock,
+  #bottom-cluster.collapsed #scrub-wrap {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-10px);
+  }
+  #dock, #scrub-wrap { transition: opacity 0.25s ease, transform 0.25s ease; }
+
+  #btn-dock-toggle {
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    margin-left: 8px;
+    width: 27px;
+    height: 27px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    background: rgba(14,14,20,0.78);
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transform: translateY(-50%);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    transition: color 0.2s ease, background 0.2s ease;
+  }
+  #btn-dock-toggle:hover { color: var(--text); background: rgba(255,255,255,0.1); }
+  #btn-dock-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  #btn-dock-toggle svg { width: 14px; height: 14px; transition: transform 0.25s ease; }
+  #bottom-cluster.collapsed #btn-dock-toggle svg { transform: rotate(180deg); }
+
+  #scrub-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: min(420px, 72vw);
+    height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: height 0.3s ease, opacity 0.3s ease;
+  }
+  #scrub-wrap.visible { height: 20px; opacity: 1; }
+
+  #scrub-wrap span {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+    width: 34px;
+    flex: none;
+  }
+  #scrub-wrap span:last-child { text-align: right; }
+
+  input[type="range"]#scrub {
+    -webkit-appearance: none;
+    appearance: none;
+    flex: 1;
+    height: 3px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.14);
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  input[type="range"]#scrub::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+    margin-top: -4px;
+  }
+  input[type="range"]#scrub::-moz-range-thumb {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: none;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+  }
+
+  #dock {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: rgba(14,14,20,0.82);
+    border: 1px solid var(--line);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+  }
+
+  #btn-theme { position: relative; }
+  #btn-theme::after {
+    content: '';
+    position: absolute;
+    right: 7px;
+    bottom: 7px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 7px var(--accent);
+  }
+
+  button.ctrl {
+    -webkit-appearance: none;
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    width: 38px;
+    height: 38px;
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+  }
+  button.ctrl:hover { background: rgba(255,255,255,0.08); }
+  button.ctrl:active { transform: scale(0.94); }
+  button.ctrl:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  button.ctrl.primary { width: 44px; height: 44px; background: rgba(255,255,255,0.1); }
+  button.ctrl.primary:hover { background: rgba(255,255,255,0.18); }
+  button.ctrl.on { color: var(--accent); }
+  button.ctrl svg { width: 16px; height: 16px; }
+  button.ctrl.primary svg { width: 17px; height: 17px; }
+
+  button.text-btn {
+    -webkit-appearance: none;
+    appearance: none;
+    border: 1px solid var(--line);
+    background: rgba(255,255,255,0.03);
+    color: var(--text);
+    font-size: 13px;
+    padding: 10px 18px;
+    border-radius: 999px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  }
+  button.text-btn:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.22); }
+  button.text-btn:active { transform: scale(0.96); }
+  button.text-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  button.text-btn svg { width: 14px; height: 14px; opacity: 0.85; }
+
+  .divider { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+
+  #status {
+    position: fixed;
+    bottom: 116px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 12px;
+    color: var(--text-dim);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+    max-width: min(80vw, 420px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    z-index: 2;
+  }
+  #status.show { opacity: 1; }
+
+  #file-input { display: none; }
+
+  @media (prefers-reduced-motion: reduce) { .fade-target { transition: none; } }
+  @media (max-width: 520px) {
+    #empty { padding: 0 18px 112px; }
+    .empty-actions { flex-wrap: wrap; justify-content: center; }
+    #track-label { left: 18px; max-width: calc(100vw - 36px); }
+    #status { bottom: 126px; }
+    #dock { max-width: calc(100vw - 18px); gap: 2px; padding-left: 7px; padding-right: 7px; }
+    button.ctrl { width: 34px; height: 34px; }
+    button.ctrl.primary { width: 40px; height: 40px; }
+    #btn-dock-toggle { left: auto; right: 100%; margin-left: 0; margin-right: 8px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="canvas-wrap">
+  <canvas id="viz"></canvas>
+</div>
+<div id="yt-artwork" aria-hidden="true"></div>
+<div id="edge-glow" aria-hidden="true"></div>
+<div id="empty" class="fade-target">
+  <h1>Nothing playing</h1>
+  <p>Load a track or open the mic — the bloom responds to your sound.</p>
+  <div class="empty-actions">
+    <button class="text-btn" id="empty-upload">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M6 9l6-6 6 6"/><path d="M4 20h16"/></svg>
+      Choose a file
+    </button>
+    <button class="text-btn" id="empty-mic">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+      Use microphone
+    </button>
+  </div>
+</div>
+
+<div id="track-label" class="fade-target"></div>
+<div id="status" class="fade-target"></div>
+
+<div id="bottom-cluster" class="fade-target">
+  <button id="btn-dock-toggle" title="Hide controls" aria-label="Hide controls">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 6-6 6 6 6"/></svg>
+  </button>
+  <div id="scrub-wrap">
+    <span id="time-current">0:00</span>
+    <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Playback position" />
+    <span id="time-duration">0:00</span>
+  </div>
+
+  <div id="dock">
+    <button class="ctrl" id="btn-upload" title="Load a track" aria-label="Load a track">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M6 9l6-6 6 6"/><path d="M4 20h16"/></svg>
+    </button>
+
+    <button class="ctrl" id="btn-prev" title="Previous track (YouTube Music)" aria-label="Previous track" disabled>
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM19 6.5 10 12l9 5.5V6.5z"/></svg>
+    </button>
+
+    <button class="ctrl primary" id="btn-play" title="Play" aria-label="Play" disabled>
+      <svg id="icon-play" viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 20,12 8,19"/></svg>
+      <svg id="icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+    </button>
+
+    <button class="ctrl" id="btn-next" title="Next track (YouTube Music)" aria-label="Next track" disabled>
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5h2v14h-2zM5 6.5 14 12l-9 5.5V6.5z"/></svg>
+    </button>
+
+    <button class="ctrl" id="btn-mic" title="Use microphone" aria-label="Use microphone">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+    </button>
+
+    <div class="divider"></div>
+
+    <button class="ctrl" id="btn-loop" title="Loop track" aria-label="Loop track">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+    </button>
+
+    <button class="ctrl" id="btn-yt" title="Connect YouTube Music tab" aria-label="Connect YouTube Music tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3V9Z"/><path d="M7 3h10"/></svg>
+    </button>
+
+    <button class="ctrl" id="btn-spotify" title="Connect Spotify tab" aria-label="Connect Spotify tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M8 10.2c2.8-.7 5.5-.4 8 .8M8.5 13c2.3-.5 4.5-.2 6.5.7M9.2 15.5c1.7-.3 3.2-.1 4.7.5"/></svg>
+    </button>
+
+    <button class="ctrl" id="btn-sensitivity" title="Cycle visual intensity" aria-label="Cycle visual intensity">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-6"/></svg>
+    </button>
+
+    <button class="ctrl on" id="btn-theme" title="Switch to theme colors" aria-label="Switch to theme colors">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 4v16M4 12h16M6.3 6.3l11.4 11.4M17.7 6.3L6.3 17.7"/></svg>
+    </button>
+  </div>
+</div>
+
+<input type="file" id="file-input" accept="audio/*" />
+
+<script>
+(() => {
+  const canvas = document.getElementById('viz');
+  const ctx = canvas.getContext('2d');
+  const empty = document.getElementById('empty');
+  const bottomCluster = document.getElementById('bottom-cluster');
+  const btnDockToggle = document.getElementById('btn-dock-toggle');
+  const trackLabel = document.getElementById('track-label');
+  const statusEl = document.getElementById('status');
+  const fileInput = document.getElementById('file-input');
+  const ytArtwork = document.getElementById('yt-artwork');
+
+  const btnUpload = document.getElementById('btn-upload');
+  const emptyUpload = document.getElementById('empty-upload');
+  const btnMic = document.getElementById('btn-mic');
+  const emptyMic = document.getElementById('empty-mic');
+  const btnPlay = document.getElementById('btn-play');
+  const btnPrev = document.getElementById('btn-prev');
+  const btnNext = document.getElementById('btn-next');
+  const btnLoop = document.getElementById('btn-loop');
+  const btnYt = document.getElementById('btn-yt');
+  const btnSpotify = document.getElementById('btn-spotify');
+  const btnSensitivity = document.getElementById('btn-sensitivity');
+  const btnTheme = document.getElementById('btn-theme');
+  const iconPlay = document.getElementById('icon-play');
+  const iconPause = document.getElementById('icon-pause');
+
+  const scrubWrap = document.getElementById('scrub-wrap');
+  const scrub = document.getElementById('scrub');
+  const timeCurrent = document.getElementById('time-current');
+  const timeDuration = document.getElementById('time-duration');
+
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  let audioCtx = null, analyser = null, sourceNode = null, audioEl = null, micStream = null;
+  let freqData = null, timeData = null, raf = null, hasSource = false;
+  let hue = 250;
+  let smoothBass = 0, smoothMid = 0, smoothTreb = 0, smoothRms = 0;
+  let prevBass = 0;
+  let rotation = 0;
+  let t = 0;
+  let colorMode = 'rgb';
+  let dockActivityTimer = null;
+  let seeking = false;
+  let loopEnabled = false;
+  let ytLinked = false;
+  let ytProvider = 'youtube';
+  let ytAnalysis = null;
+  let ytAudioAnnounced = false;
+  let shakeX = 0;
+  let shakeY = 0;
+  let panX = 0;
+  let panY = 0;
+  let panPhase = 0;
+  let bopEnergy = 0;
+  let localBandEnergy = 0;
+  let localFluxHistory = [];
+  let localLastBeatTime = 0;
+  let themeRgb = { r: 210, g: 80, b: 190 };
+
+  // Transient response: camera shake and soft gaussian blur
+  let shakeEnergy = 0;
+  let blurEnergy = 0;
+  let thumpEnergy = 0;
+
+  const sensitivities = [0.82, 1, 1.18];
+  let sensIdx = 0;
+  const sensitivityNames = ['Calm', 'Balanced', 'Intense'];
+
+  function lerp(a, b, k) { return a + (b - a) * k; }
+  function fmtTime(s) {
+    if (!isFinite(s) || s < 0) s = 0;
+    const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+    return m + ':' + String(sec).padStart(2, '0');
+  }
+  function showStatus(msg, ms = 2200) {
+    statusEl.textContent = msg;
+    statusEl.classList.add('show');
+    clearTimeout(showStatus._t);
+    showStatus._t = setTimeout(() => statusEl.classList.remove('show'), ms);
+  }
+  function wakeDock() {
+    if (bottomCluster.classList.contains('collapsed')) return;
+    bottomCluster.classList.add('active');
+    clearTimeout(dockActivityTimer);
+    dockActivityTimer = setTimeout(() => bottomCluster.classList.remove('active'), 2600);
+  }
+  ['mousemove','touchstart','keydown'].forEach(evt => window.addEventListener(evt, wakeDock, { passive: true }));
+
+  btnDockToggle.addEventListener('click', () => {
+    const collapsed = bottomCluster.classList.toggle('collapsed');
+    btnDockToggle.title = collapsed ? 'Show controls' : 'Hide controls';
+    btnDockToggle.setAttribute('aria-label', btnDockToggle.title);
+  });
+
+  function colorHue(offset = 0) {
+    if (colorMode === 'theme') return rgbToHue(themeRgb.r, themeRgb.g, themeRgb.b) + offset * 0.55;
+    return (t * 48 + offset * 1.15 + hue) % 360;
+  }
+  function rgbToHue(r, g, b) {
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), delta = max - min;
+    if (!delta) return 0;
+    let result = max === r ? ((g - b) / delta) % 6 : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4;
+    return Math.round((result * 60 + 360) % 360);
+  }
+  function sceneColor(offset, saturation, lightness, alpha) {
+    if (colorMode === 'theme' && saturation > 35) {
+      saturation = Math.min(saturation, 72);
+      lightness = Math.min(lightness + 3, 88);
+    }
+    return `hsla(${colorHue(offset)}, ${saturation}%, ${lightness}%, ${alpha})`;
+  }
+  function updateThemeUi() {
+    const themeMode = colorMode === 'theme';
+    btnTheme.classList.toggle('on', !themeMode);
+    btnTheme.title = themeMode ? 'Switch to RGB colors' : 'Switch to theme colors';
+    btnTheme.setAttribute('aria-label', btnTheme.title);
+  }
+  function updateLoopUi() { btnLoop.classList.toggle('on', loopEnabled); }
+
+  function detectLocalBeat(now) {
+    if (!freqData) return false;
+    const lowBin = 1;
+    const highBin = Math.min(6, freqData.length - 1);
+    let bandEnergy = 0;
+    for (let i = lowBin; i <= highBin; i++) bandEnergy += freqData[i];
+    bandEnergy /= highBin - lowBin + 1;
+    const flux = Math.max(0, bandEnergy - localBandEnergy);
+    localBandEnergy = bandEnergy;
+    localFluxHistory.push(flux);
+    if (localFluxHistory.length > 35) localFluxHistory.shift();
+    let mean = 0;
+    for (let i = 0; i < localFluxHistory.length; i++) mean += localFluxHistory[i];
+    mean /= localFluxHistory.length || 1;
+    let variance = 0;
+    for (let i = 0; i < localFluxHistory.length; i++) variance += (localFluxHistory[i] - mean) ** 2;
+    const threshold = mean + 2.4 * Math.sqrt(variance / (localFluxHistory.length || 1)) + 1.5;
+    if (flux > threshold && flux > 3 && now - localLastBeatTime > 140) {
+      localLastBeatTime = now;
+      return true;
+    }
+    return false;
+  }
+
+  function applyYtAnalysisToBuffers() {
+    if (!ytAnalysis || !freqData || !timeData) return;
+    const bass = Math.max(0, Math.min(1, ytAnalysis.bass || 0));
+    const mid = Math.max(0, Math.min(1, ytAnalysis.mid || 0));
+    const treb = Math.max(0, Math.min(1, ytAnalysis.treb || 0));
+    const rms = Math.max(0, Math.min(1, ytAnalysis.rms || 0));
+    const bassEnd = Math.floor(freqData.length * 0.08);
+    const midEnd = Math.floor(freqData.length * 0.35);
+    for (let i = 0; i < freqData.length; i++) {
+      const bandValue = i < bassEnd ? bass : i < midEnd ? mid : treb;
+      const ripple = 0.82 + Math.sin(t * 5 + i * 0.17) * 0.18;
+      freqData[i] = Math.round(bandValue * 255 * ripple);
+    }
+    for (let i = 0; i < timeData.length; i++) {
+      const wave = Math.sin(t * 8 + i * 0.08) * rms * 52;
+      timeData[i] = Math.max(0, Math.min(255, Math.round(128 + wave)));
+    }
+  }
+
+  function petalPath(cx0, cy0, x1, y1, width) {
+    const mx = (cx0 + x1) / 2, my = (cy0 + y1) / 2;
+    const dx = x1 - cx0, dy = y1 - cy0;
+    const len = Math.hypot(dx, dy) || 1;
+    const px = -dy / len, py = dx / len;
+    ctx.beginPath();
+    ctx.moveTo(cx0, cy0);
+    ctx.quadraticCurveTo(mx + px * width, my + py * width, x1, y1);
+    ctx.quadraticCurveTo(mx - px * width, my - py * width, cx0, cy0);
+    ctx.closePath();
+  }
+
+  function ensureAudioCtx() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.3;
+      freqData = new Uint8Array(analyser.frequencyBinCount);
+      timeData = new Uint8Array(analyser.fftSize);
+    }
+  }
+
+  function markHasSource() {
+    hasSource = true;
+    empty.classList.add('hidden');
+    btnPlay.disabled = ytLinked;
+    if (!raf) loop();
+  }
+
+  // ---------- File playback ----------
+  function loadFile(file) {
+    ensureAudioCtx();
+    ytLinked = false;
+    ytAnalysis = null;
+    ytAudioAnnounced = false;
+    updateYtUi();
+    if (sourceNode) { try { sourceNode.disconnect(); } catch(e){} }
+    if (audioEl) { audioEl.pause(); audioEl.src = ''; }
+
+    audioEl = new Audio();
+    audioEl.src = URL.createObjectURL(file);
+    audioEl.crossOrigin = 'anonymous';
+    audioEl.loop = loopEnabled;
+
+    sourceNode = audioCtx.createMediaElementSource(audioEl);
+    sourceNode.connect(analyser);
+    analyser.connect(audioCtx.destination);
+
+    audioEl.addEventListener('ended', () => { if (!loopEnabled) setPlayIcon(false); });
+    audioEl.addEventListener('loadedmetadata', () => {
+      timeDuration.textContent = fmtTime(audioEl.duration);
+      scrubWrap.classList.add('visible');
+    });
+    audioEl.addEventListener('timeupdate', () => {
+      if (seeking) return;
+      timeCurrent.textContent = fmtTime(audioEl.currentTime);
+      if (audioEl.duration) scrub.value = (audioEl.currentTime / audioEl.duration) * 1000;
+    });
+
+    audioEl.play().then(() => {
+      setPlayIcon(true);
+      trackLabel.textContent = file.name;
+      trackLabel.style.opacity = 0.8;
+      markHasSource();
+      showStatus('Playing ' + file.name);
+    }).catch(() => showStatus('Could not play that file'));
+  }
+
+  function setPlayIcon(playing) {
+    iconPlay.style.display = playing ? 'none' : '';
+    iconPause.style.display = playing ? '' : 'none';
+    btnPlay.title = playing ? 'Pause' : 'Play';
+    btnPlay.setAttribute('aria-label', btnPlay.title);
+  }
+
+  btnUpload.addEventListener('click', () => fileInput.click());
+  emptyUpload.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => { const f = e.target.files && e.target.files[0]; if (f) loadFile(f); });
+
+  btnPlay.addEventListener('click', () => {
+    if (ytLinked) {
+      window.postMessage({ source: 'bloom-visualizer', type: 'yt-control', command: 'toggle-play' }, '*');
+      return;
+    }
+    if (!audioEl) return;
+    if (audioEl.paused) { audioEl.play(); setPlayIcon(true); }
+    else { audioEl.pause(); setPlayIcon(false); }
+  });
+
+  btnPrev.addEventListener('click', () => {
+    if (ytLinked) window.postMessage({ source: 'bloom-visualizer', type: 'yt-control', command: 'previous' }, '*');
+  });
+
+  btnNext.addEventListener('click', () => {
+    if (ytLinked) window.postMessage({ source: 'bloom-visualizer', type: 'yt-control', command: 'next' }, '*');
+  });
+
+  btnLoop.addEventListener('click', () => {
+    loopEnabled = !loopEnabled;
+    if (audioEl) audioEl.loop = loopEnabled;
+    updateLoopUi();
+    showStatus(loopEnabled ? 'Looping this track' : 'Loop off');
+  });
+
+  function updateYtUi() {
+    btnYt.classList.toggle('on', ytLinked);
+    btnYt.title = ytLinked ? 'Close YouTube Music mode' : 'Open YouTube Music';
+    btnYt.setAttribute('aria-label', btnYt.title);
+    btnPlay.disabled = !ytLinked && !audioEl;
+    btnPrev.disabled = !ytLinked;
+    btnNext.disabled = !ytLinked;
+    btnPlay.title = ytLinked ? 'Play or pause YouTube Music' : (audioEl && !audioEl.paused ? 'Pause' : 'Play');
+    btnPlay.setAttribute('aria-label', btnPlay.title);
+    btnSpotify.classList.toggle('on', ytLinked && ytProvider === 'spotify');
+    btnYt.classList.toggle('on', ytLinked && ytProvider === 'youtube');
+  }
+
+  function toggleYtMusic() {
+    ytLinked = !ytLinked;
+    ytProvider = 'youtube';
+    if (ytLinked) {
+      ensureAudioCtx();
+      if (audioEl) {
+        audioEl.pause();
+        audioEl.muted = true;
+        setPlayIcon(false);
+      }
+      hasSource = false;
+      ytAnalysis = null;
+      ytAudioAnnounced = false;
+      window.open('https://music.youtube.com', '_blank', 'noopener');
+      window.postMessage({ source: 'bloom-visualizer', type: 'yt-open' }, '*');
+      trackLabel.textContent = 'YouTube Music mode';
+      trackLabel.style.opacity = 0.8;
+      showStatus('YouTube Music opened; playback is controlled there');
+    } else {
+      if (audioEl) audioEl.muted = false;
+      ytAnalysis = null;
+      window.postMessage({ source: 'bloom-visualizer', type: 'yt-close' }, '*');
+      ytArtwork.classList.remove('visible');
+      trackLabel.textContent = audioEl ? 'Local track paused' : '';
+      trackLabel.style.opacity = audioEl ? 0.8 : 0;
+      showStatus('YouTube Music mode off');
+    }
+    updateYtUi();
+  }
+  btnYt.addEventListener('click', toggleYtMusic);
+
+  function toggleSpotify() {
+    ytLinked = !ytLinked;
+    ytProvider = 'spotify';
+    if (ytLinked) {
+      ensureAudioCtx();
+      if (audioEl) { audioEl.pause(); audioEl.muted = true; setPlayIcon(false); }
+      hasSource = false;
+      ytAnalysis = null;
+      window.open('https://open.spotify.com', '_blank', 'noopener');
+      window.postMessage({ source: 'bloom-visualizer', type: 'music-open', provider: 'spotify' }, '*');
+      trackLabel.textContent = 'Spotify mode';
+      trackLabel.style.opacity = 0.8;
+      showStatus('Spotify opened; click the extension icon on its tab');
+    } else {
+      ytAnalysis = null;
+      window.postMessage({ source: 'bloom-visualizer', type: 'music-close' }, '*');
+      ytArtwork.classList.remove('visible');
+      updateYtUi();
+      showStatus('Spotify mode off');
+    }
+    updateYtUi();
+  }
+  btnSpotify.addEventListener('click', toggleSpotify);
+
+  window.addEventListener('message', event => {
+    if (event.source !== window || event.data?.source !== 'bloom-extension') return;
+    if (event.data.type === 'yt-state') {
+      if (event.data.artwork) {
+        ytArtwork.style.backgroundImage = `url("${event.data.artwork}")`;
+        ytArtwork.classList.add('visible');
+      }
+      if (event.data.title) trackLabel.textContent = event.data.title;
+      if (event.data.primaryColor) themeRgb = event.data.primaryColor;
+    }
+    if (event.data.type === 'yt-audio') {
+      ytAnalysis = event.data;
+      ensureAudioCtx();
+      hasSource = true;
+      empty.classList.add('hidden');
+      updateYtUi();
+      if (!ytAudioAnnounced) {
+        ytAudioAnnounced = true;
+        showStatus('YouTube Music audio connected', 1200);
+      }
+      if (!raf) loop();
+    }
+    if (event.data.type === 'yt-beat') {
+      if (!reducedMotion) {
+        const intensity = sensitivities[sensIdx];
+        bopEnergy = Math.min(1, bopEnergy + 0.24 * intensity);
+        thumpEnergy = Math.min(0.025, thumpEnergy + 0.012 * intensity);
+      }
+    }
+    if (event.data.type === 'yt-audio-unavailable') {
+      showStatus('YouTube audio unavailable: ' + (event.data.error || 'check extension permissions'));
+    }
+    if (event.data.type === 'yt-awaiting-toolbar') {
+      showStatus('Click the Bloom extension icon on the YouTube Music tab');
+    }
+    if (event.data.type === 'yt-disconnected') ytArtwork.classList.remove('visible');
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.code === 'Space' && audioEl && document.activeElement.tagName !== 'BUTTON' && document.activeElement.type !== 'range') {
+      e.preventDefault();
+      btnPlay.click();
+    }
+  });
+  canvas.addEventListener('click', () => { if (audioEl) btnPlay.click(); });
+
+  // ---------- Scrubber ----------
+  scrub.addEventListener('input', () => {
+    seeking = true;
+    if (audioEl && audioEl.duration) {
+      const target = (scrub.value / 1000) * audioEl.duration;
+      timeCurrent.textContent = fmtTime(target);
+    }
+  });
+  scrub.addEventListener('change', () => {
+    if (audioEl && audioEl.duration) audioEl.currentTime = (scrub.value / 1000) * audioEl.duration;
+    seeking = false;
+  });
+
+  // ---------- Microphone ----------
+  async function useMic() {
+    try {
+      ensureAudioCtx();
+      ytLinked = false;
+      ytAnalysis = null;
+      ytAudioAnnounced = false;
+      updateYtUi();
+      if (audioEl) { audioEl.pause(); setPlayIcon(false); }
+      scrubWrap.classList.remove('visible');
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (sourceNode) { try { sourceNode.disconnect(); } catch(e){} }
+      sourceNode = audioCtx.createMediaStreamSource(micStream);
+      sourceNode.connect(analyser);
+      trackLabel.textContent = 'Listening to microphone';
+      trackLabel.style.opacity = 0.8;
+      btnPlay.disabled = true;
+      markHasSource();
+      showStatus('Listening through microphone');
+    } catch (err) {
+      showStatus('Microphone access denied');
+    }
+  }
+  btnMic.addEventListener('click', useMic);
+  emptyMic.addEventListener('click', useMic);
+
+  // ---------- Sensitivity ----------
+  btnSensitivity.addEventListener('click', () => {
+    sensIdx = (sensIdx + 1) % sensitivities.length;
+    btnSensitivity.title = 'Intensity: ' + sensitivityNames[sensIdx] + ' (click to cycle)';
+    btnSensitivity.setAttribute('aria-label', btnSensitivity.title);
+    showStatus('Intensity: ' + sensitivityNames[sensIdx]);
+  });
+
+  btnTheme.addEventListener('click', () => {
+    colorMode = colorMode === 'rgb' ? 'theme' : 'rgb';
+    updateThemeUi();
+    showStatus(colorMode === 'rgb' ? 'RGB colors' : 'Theme colors');
+  });
+
+  // ---------- Drag & drop ----------
+  ['dragover','drop'].forEach(evt => window.addEventListener(evt, e => e.preventDefault()));
+  window.addEventListener('drop', e => {
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f && f.type.startsWith('audio/')) loadFile(f);
+  });
+
+  // ---------- Precise Canvas Sizing ----------
+  let W = window.innerWidth, H = window.innerHeight;
+  let DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+  updateThemeUi();
+  updateLoopUi();
+  updateYtUi();
+
+  // ---------- Particles & Scene Entities ----------
+  const FIREFLY_COUNT = 30;
+  const fireflies = Array.from({ length: FIREFLY_COUNT }, () => ({
+    ox: Math.random() * W,
+    oy: Math.random() * H,
+    driftA: Math.random() * Math.PI * 2,
+    driftB: Math.random() * Math.PI * 2,
+    radius: 30 + Math.random() * 60,
+    twinklePhase: Math.random() * Math.PI * 2,
+    twinkleSpeed: 0.5 + Math.random() * 0.7,
+    size: 1.2 + Math.random() * 1.6,
+    depth: 0.25 + Math.random() * 0.75,
+    hueOffset: (Math.random() - 0.5) * 50
+  }));
+
+  const SPORE_COUNT = 34;
+  const spores = Array.from({ length: SPORE_COUNT }, () => ({
+    angle: Math.random() * Math.PI * 2,
+    dist: Math.random() * 120,
+    speed: 12 + Math.random() * 22,
+    wobblePhase: Math.random() * Math.PI * 2,
+    size: 1.8 + Math.random() * 2.8,
+    depth: 0.18 + Math.random() * 0.82,
+    alpha: 0.25 + Math.random() * 0.55,
+    hueShift: (Math.random() - 0.5) * 40
+  }));
+
+  const ripples = [];
+  const bokeh = Array.from({ length: 7 }, () => ({
+    x: Math.random(),
+    y: Math.random(),
+    vx: (Math.random() - 0.5) * 0.012,
+    vy: (Math.random() - 0.5) * 0.012,
+    radius: 0.045 + Math.random() * 0.065,
+    hueOffset: Math.random() * 360,
+    phase: Math.random() * Math.PI * 2
+  }));
+
+  function drawBokeh(dt, energy, musicFactor) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    bokeh.forEach(blob => {
+      blob.x += blob.vx * dt * (1 + musicFactor * 2);
+      blob.y += blob.vy * dt * (1 + musicFactor * 2);
+      if (blob.x < -0.1 || blob.x > 1.1) blob.vx *= -1;
+      if (blob.y < -0.1 || blob.y > 1.1) blob.vy *= -1;
+      blob.phase += dt * 0.7;
+      const pulse = 0.82 + Math.sin(blob.phase) * 0.18;
+      const x = blob.x * W, y = blob.y * H;
+      const radius = Math.min(W, H) * blob.radius;
+      const glow = ctx.createRadialGradient(x, y, 0, x, y, radius);
+      glow.addColorStop(0, sceneColor(blob.hueOffset, 68, 76, 0.1 + energy * 0.04) );
+      glow.addColorStop(0.55, sceneColor(blob.hueOffset, 62, 60, (0.035 + energy * 0.018) * pulse));
+      glow.addColorStop(1, sceneColor(blob.hueOffset, 58, 50, 0));
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
+  }
+
+  const edgeTraces = Array.from({ length: 10 }, (_, index) => ({
+    side: index % 4,
+    offset: Math.random(),
+    speed: 0.04 + Math.random() * 0.08,
+    length: 0.03 + Math.random() * 0.06,
+    hueOffset: index * 42
+  }));
+
+  function drawEdgeTraces(dt, bass, energy) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    edgeTraces.forEach(trace => {
+      trace.offset = (trace.offset + trace.speed * dt * (1 + bass * 2)) % 1;
+      const length = trace.length * Math.min(W, H);
+      const position = trace.offset * (trace.side % 2 ? H : W);
+      const alpha = Math.min(0.09, 0.012 + bass * 0.045 + energy * 0.012);
+      ctx.strokeStyle = sceneColor(trace.hueOffset, 78, 70, alpha);
+      ctx.lineWidth = 0.7 + bass * 0.8;
+      ctx.beginPath();
+      if (trace.side === 0) {
+        ctx.moveTo(position, 0);
+        ctx.lineTo(position + length, 0);
+      } else if (trace.side === 1) {
+        ctx.moveTo(W, position);
+        ctx.lineTo(W, position + length);
+      } else if (trace.side === 2) {
+        ctx.moveTo(position, H);
+        ctx.lineTo(position - length, H);
+      } else {
+        ctx.moveTo(0, position);
+        ctx.lineTo(0, position - length);
+      }
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  function drawCenterGlow(cx, cy, minDim, energy, bass) {
+    const glowRadius = minDim * (0.16 + bass * 0.18 + energy * 0.08);
+    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, glowRadius);
+    glow.addColorStop(0, sceneColor(0, 100, 96, 0.34 + energy * 0.32));
+    glow.addColorStop(0.22, sceneColor(28, 96, 82, 0.16 + bass * 0.2));
+    glow.addColorStop(0.62, sceneColor(62, 90, 68, 0.06 + bass * 0.08));
+    glow.addColorStop(1, sceneColor(90, 90, 60, 0));
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(cx, cy, glowRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Butterflies tethered to flower proximity so they never leave the screen
+  const BUTTERFLY_COUNT = 3;
+  const butterflies = Array.from({ length: BUTTERFLY_COUNT }, () => ({
+    orbitRadiusX: 0.14 + Math.random() * 0.12,
+    orbitRadiusY: 0.12 + Math.random() * 0.10,
+    speedA: 0.45 + Math.random() * 0.35,
+    speedB: 0.65 + Math.random() * 0.45,
+    phaseA: Math.random() * Math.PI * 2,
+    phaseB: Math.random() * Math.PI * 2,
+    flapPhase: Math.random() * Math.PI * 2,
+    flapSpeed: 2.5 + Math.random() * 1.2,
+    size: 9 + Math.random() * 6,
+    hueOffset: (Math.random() - 0.5) * 60,
+    px: 0,
+    py: 0
+  }));
+
+  const AURORA_COUNT = 2;
+  const auroraBlobs = Array.from({ length: AURORA_COUNT }, (_, i) => ({
+    fa: 0.05 + Math.random() * 0.04,
+    fb: 0.04 + Math.random() * 0.05,
+    phaseA: Math.random() * Math.PI * 2,
+    phaseB: Math.random() * Math.PI * 2,
+    rxFrac: 0.22 + Math.random() * 0.16,
+    ryFrac: 0.20 + Math.random() * 0.16,
+    hueOffset: i * (360 / AURORA_COUNT),
+    sizeFrac: 0.35 + Math.random() * 0.15
+  }));
+
+  // ---------- Draw Loop ----------
+  function draw(dt) {
+    const baseCx = W / 2;
+    const baseCy = H / 2;
+    const cx = baseCx + panX + shakeX;
+    const cy = baseCy + panY + shakeY;
+    const minDim = Math.min(W, H);
+    const senseMul = sensitivities[sensIdx];
+
+    let bass = 0, mid = 0, treb = 0, rms = 0;
+    const isPlaying = hasSource && ((audioEl && !audioEl.paused) || (micStream !== null) || (ytLinked && ytAnalysis !== null));
+
+    if (hasSource) {
+      if (ytLinked && ytAnalysis) {
+        applyYtAnalysisToBuffers();
+        bass = ytAnalysis.bass;
+        mid = ytAnalysis.mid;
+        treb = ytAnalysis.treb;
+        rms = ytAnalysis.rms;
+      } else if (analyser) {
+        analyser.getByteFrequencyData(freqData);
+        analyser.getByteTimeDomainData(timeData);
+        if (isPlaying && detectLocalBeat(performance.now()) && !reducedMotion) {
+          const intensity = sensitivities[sensIdx];
+          bopEnergy = Math.min(1, bopEnergy + 0.24 * intensity);
+          thumpEnergy = Math.min(0.025, thumpEnergy + 0.012 * intensity);
+        }
+        const n = freqData.length;
+        const bassEnd = Math.floor(n * 0.08);
+        const midEnd = Math.floor(n * 0.35);
+
+        for (let i = 0; i < bassEnd; i++) bass += freqData[i];
+        bass /= (bassEnd * 255);
+
+        for (let i = bassEnd; i < midEnd; i++) mid += freqData[i];
+        mid /= ((midEnd - bassEnd) * 255);
+
+        for (let i = midEnd; i < n; i++) treb += freqData[i];
+        treb /= ((n - midEnd) * 255);
+
+        let sumSq = 0;
+        for (let i = 0; i < timeData.length; i++) {
+          const v = (timeData[i] - 128) / 128;
+          sumSq += v * v;
+        }
+        rms = Math.sqrt(sumSq / timeData.length);
+      }
+    }
+
+    smoothBass = lerp(smoothBass, bass, 0.16);
+    smoothMid  = lerp(smoothMid, mid, 0.16);
+    smoothTreb = lerp(smoothTreb, treb, 0.16);
+    smoothRms  = lerp(smoothRms, rms, 0.12);
+
+    const energy = smoothRms * senseMul;
+    const musicFactor = isPlaying ? Math.min(Math.max((smoothRms - 0.01) * 16, 0.05), 1) : 0;
+
+    // Transient kicks for subtle camera shake and gaussian blur pulse
+    const bassDelta = Math.max(0, bass - prevBass);
+    if (isPlaying && !reducedMotion) {
+      shakeEnergy = Math.max(shakeEnergy, smoothBass * 0.45 * senseMul);
+    }
+    if (bassDelta > 0.09 * (2 - senseMul * 0.5) && isPlaying) {
+      shakeEnergy = Math.min(shakeEnergy + bassDelta * 2.4 * senseMul, 1.35);
+      blurEnergy = Math.min(blurEnergy + bassDelta * 2.8 * senseMul, 1.2);
+      thumpEnergy = Math.min(thumpEnergy + bassDelta * 0.22 * senseMul, 0.045);
+      bopEnergy = Math.min(bopEnergy + bassDelta * 0.25 * senseMul, 1);
+    }
+
+    // Expanding bass shockwave ripples
+    if (bass > 0.42 && bassDelta > 0.13 * (2 - senseMul * 0.5) && isPlaying) {
+      ripples.push({
+        r: minDim * 0.05,
+        maxR: minDim * (0.32 + bass * 0.35),
+        alpha: 0.65,
+        speed: (210 + bass * 240) * senseMul,
+        hue: hue + (Math.random() - 0.5) * 40
+      });
+    }
+    prevBass = bass;
+
+    shakeEnergy = lerp(shakeEnergy, 0, dt * 14);
+    blurEnergy = lerp(blurEnergy, 0, dt * 10);
+    thumpEnergy = lerp(thumpEnergy, 0, dt * 9);
+    bopEnergy = lerp(bopEnergy, 0, dt * 8);
+
+    panPhase += dt * (0.55 + smoothBass * 1.2);
+    const panTargetX = reducedMotion ? 0 : Math.sin(panPhase) * minDim * (0.004 + smoothBass * 0.012);
+    const panTargetY = reducedMotion ? 0 : Math.cos(panPhase * 0.7) * minDim * (0.003 + smoothMid * 0.008);
+    panX = lerp(panX, panTargetX, dt * 2.2);
+    panY = lerp(panY, panTargetY, dt * 2.2);
+    shakeX = reducedMotion ? 0 : Math.sin(t * 38) * shakeEnergy * 0.35;
+    shakeY = reducedMotion ? 0 : -bopEnergy * 1.8 - Math.abs(Math.sin(t * 30)) * shakeEnergy * 0.22;
+
+    // Dynamic global hue
+    const targetHue = colorMode === 'theme'
+      ? rgbToHue(themeRgb.r, themeRgb.g, themeRgb.b) + (smoothTreb - smoothBass) * 12
+      : (t * 48 + smoothTreb * 90 - smoothBass * 35) % 360;
+    hue = lerp(hue, ((targetHue % 360) + 360) % 360, 0.03);
+    document.documentElement.style.setProperty('--accent', sceneColor(0, 80, 68, 1));
+    document.documentElement.style.setProperty('--edge-hue', colorHue(0).toFixed(1));
+    document.documentElement.style.setProperty('--edge-alpha', Math.min(0.16, 0.025 + smoothBass * 0.15 + energy * 0.035).toFixed(3));
+
+    // Clear each frame so the moving bokeh stays bright instead of being buried under a dark trail.
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = colorMode === 'theme' ? '#120912' : '#090a10';
+    ctx.fillRect(0, 0, W, H);
+
+    // A small internal camera punch makes each bass hit feel physical without moving the viewport.
+    const thumpScale = 1 + (reducedMotion ? 0 : thumpEnergy + bopEnergy * 0.007);
+    if (thumpScale !== 1) {
+      ctx.save();
+      ctx.translate(baseCx, baseCy);
+      ctx.scale(thumpScale, thumpScale);
+      ctx.translate(-baseCx, -baseCy);
+    }
+
+    drawBokeh(dt, energy, musicFactor);
+    drawEdgeTraces(dt, smoothBass, energy);
+    drawCenterGlow(cx, cy, minDim, energy, smoothBass);
+
+    // Aurora backlight (centered)
+    ctx.globalCompositeOperation = 'lighter';
+    auroraBlobs.forEach(b => {
+      const bx = cx + Math.sin(t * b.fa + b.phaseA) * minDim * b.rxFrac;
+      const by = cy + Math.cos(t * b.fb + b.phaseB) * minDim * b.ryFrac;
+      const r = minDim * (b.sizeFrac + smoothBass * 0.08 * senseMul);
+      const h = hue + b.hueOffset * 0.35;
+      const grad = ctx.createRadialGradient(bx, by, 0, bx, by, r);
+      grad.addColorStop(0, `hsla(${h}, 85%, 60%, ${0.04 + energy * 0.06})`);
+      grad.addColorStop(1, `hsla(${h}, 85%, 60%, 0)`);
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(bx, by, r, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // Expanding shockwave ripples
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const rip = ripples[i];
+      rip.r += rip.speed * dt;
+      rip.alpha -= dt * 0.65;
+      if (rip.alpha <= 0 || rip.r >= rip.maxR) {
+        ripples.splice(i, 1);
+        continue;
+      }
+      ctx.save();
+      ctx.lineWidth = 2.0;
+      ctx.strokeStyle = `hsla(${rip.hue}, 90%, 75%, ${rip.alpha * 0.7})`;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rip.r, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = `hsla(${rip.hue}, 95%, 70%, ${rip.alpha * 0.22})`;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Fireflies accelerate and multiply visually as the track becomes active.
+    const fireflyMoveSpeed = 1 + musicFactor * 3.5 + smoothBass * 3;
+    const fireflyCount = Math.min(fireflies.length, Math.floor(28 + musicFactor * (fireflies.length - 28)));
+
+    for (let i = 0; i < fireflyCount; i++) {
+      const p = fireflies[i];
+      p.driftA += 0.006 * fireflyMoveSpeed;
+      p.driftB += 0.005 * fireflyMoveSpeed;
+
+      const x = p.ox + Math.sin(p.driftA) * p.radius;
+      const y = p.oy + Math.cos(p.driftB * 1.3) * p.radius * 0.7;
+      const px = ((x % W) + W) % W;
+      const py = ((y % H) + H) % H;
+
+      const naturalTwinkle = 0.5 + 0.5 * Math.sin(t * p.twinkleSpeed + p.twinklePhase);
+      const brightness = (0.12 + musicFactor * 0.55 + smoothBass * 0.2) * (0.45 + p.depth * 0.75);
+      const glow = naturalTwinkle * brightness;
+
+      const h = colorHue(p.hueOffset);
+      const r = p.size * (0.55 + p.depth * 0.9);
+
+      const grad = ctx.createRadialGradient(px, py, 0, px, py, r * 4.2);
+      grad.addColorStop(0, sceneColor(p.hueOffset, 90, 84, glow));
+      grad.addColorStop(1, sceneColor(p.hueOffset, 90, 70, 0));
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(px, py, r * 4.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Bioluminescent floating spores / pollen
+    if (musicFactor > 0.02) {
+      const sporeCount = Math.floor(12 + musicFactor * (spores.length - 12));
+      for (let i = 0; i < sporeCount; i++) {
+        const sp = spores[i];
+        sp.dist += (sp.speed + smoothBass * 40) * dt * (1 + musicFactor * 2.2);
+        sp.wobblePhase += dt * (2 + musicFactor * 4);
+        if (sp.dist > minDim * 0.42) {
+          sp.dist = Math.random() * 20;
+          sp.angle = Math.random() * Math.PI * 2;
+        }
+        const wAngle = sp.angle + Math.sin(sp.wobblePhase) * 0.2;
+          const sx = baseCx + Math.cos(wAngle) * sp.dist;
+          const sy = baseCy + Math.sin(wAngle) * sp.dist - sp.dist * 0.15;
+        const travelFade = Math.max(0, 1 - sp.dist / (minDim * 0.42));
+        const pGlow = sp.alpha * (0.3 + energy * 0.7) * (0.45 + sp.depth * 0.8) * Math.min(1, travelFade * 2.2);
+
+        ctx.fillStyle = sceneColor(sp.hueShift, 95, 85, pGlow);
+        ctx.beginPath();
+        ctx.arc(sx, sy, sp.size * (0.65 + sp.depth * 0.8) * (1 + smoothMid * 0.7), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+
+    // Bloom dimensions centered perfectly to screen dimensions
+    const baseR = minDim * (0.055 + smoothBass * 0.02 * senseMul);
+    const maxLen = minDim * 0.28;
+    const spinSpeed = (reducedMotion ? 0.0004 : 0.0009) + smoothTreb * 0.0016 * senseMul;
+    rotation += spinSpeed;
+
+    if (!hasSource) {
+      if (thumpScale !== 1) ctx.restore();
+      drawIdleBloom(cx, cy + minDim * 0.12, baseR, maxLen);
+      return;
+    }
+
+    // Circular Oscilloscope Waveform Halo
+    if (timeData) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(-rotation * 0.6);
+      const haloR = baseR * 2.8 + maxLen * 0.35;
+      ctx.beginPath();
+      const step = 4;
+      for (let i = 0; i < timeData.length; i += step) {
+        const rad = (i / timeData.length) * Math.PI * 2;
+        const wave = ((timeData[i] - 128) / 128) * (24 * senseMul);
+        const rPos = haloR + wave;
+        const x = Math.cos(rad) * rPos;
+        const y = Math.sin(rad) * rPos;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = `hsla(${hue - 15}, 85%, 75%, ${0.22 + energy * 0.35})`;
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Three Flower Petal Rings
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rotation);
+    drawPetalRing(48, freqData, 0.55, 0.98, baseR * 1.9, maxLen * 0.55, 6, hue + 22, 0.32, senseMul);
+    drawPetalRing(24, freqData, 0.25, 0.60, baseR * 1.4, maxLen * 0.80, 12, hue, 0.50, senseMul);
+    drawPetalRing(12, freqData, 0.00, 0.22, baseR,        maxLen * 1.05, 20, hue - 18, 0.72, senseMul);
+
+    // Luminous Stamens
+    const stamenCount = 14;
+    for (let s = 0; s < stamenCount; s++) {
+      const sAngle = (s / stamenCount) * Math.PI * 2 + Math.sin(t + s) * 0.06;
+      const sLen = baseR * (1.1 + smoothTreb * 1.2 * senseMul);
+      const sx0 = Math.cos(sAngle) * (baseR * 0.4);
+      const sy0 = Math.sin(sAngle) * (baseR * 0.4);
+      const sx1 = Math.cos(sAngle) * sLen;
+      const sy1 = Math.sin(sAngle) * sLen;
+
+      ctx.beginPath();
+      ctx.moveTo(sx0, sy0);
+      ctx.quadraticCurveTo(sx0 * 1.2, sy0 * 1.2, sx1, sy1);
+      ctx.strokeStyle = `hsla(${hue + 45}, 90%, 80%, ${0.5 + energy * 0.5})`;
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+
+      ctx.fillStyle = `hsla(${hue + 55}, 100%, 92%, ${0.7 + smoothTreb * 0.3})`;
+      ctx.beginPath();
+      ctx.arc(sx1, sy1, 2.4 + smoothTreb * 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Central Pistil
+    const pulseR = baseR * (1.6 + smoothRms * 2.5 * senseMul);
+    const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, pulseR);
+    coreGrad.addColorStop(0, `hsla(${hue}, 95%, 85%, 0.98)`);
+    coreGrad.addColorStop(0.5, `hsla(${hue}, 90%, 68%, 0.4)`);
+    coreGrad.addColorStop(1, `hsla(${hue}, 90%, 60%, 0)`);
+    ctx.fillStyle = coreGrad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, pulseR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Butterflies orbiting comfortably within screen bounds
+    butterflies.forEach(b => {
+      const flapSpeed = (reducedMotion ? 1.2 : 2.2) + energy * 5 * senseMul;
+      b.flapPhase += dt * flapSpeed;
+
+      const x = baseCx + Math.sin(t * b.speedA + b.phaseA) * minDim * b.orbitRadiusX;
+      const y = baseCy + Math.cos(t * b.speedB + b.phaseB) * minDim * b.orbitRadiusY;
+      const heading = Math.atan2(y - b.py, x - b.px) || 0;
+      b.px = x;
+      b.py = y;
+
+      const flap = Math.abs(Math.sin(b.flapPhase));
+      const h = hue + b.hueOffset;
+      const size = b.size;
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(heading);
+
+      [1, -1].forEach(side => {
+        const spanY = side * size * (0.5 + flap * 0.9);
+        const tipX = -size * 0.3;
+        ctx.save();
+        petalPath(0, 0, tipX, spanY, size * (0.35 + flap * 0.35));
+        const wingGrad = ctx.createLinearGradient(0, 0, tipX, spanY);
+        wingGrad.addColorStop(0, `hsla(${h}, 85%, 78%, ${0.55 + flap * 0.25})`);
+        wingGrad.addColorStop(1, `hsla(${h + 20}, 90%, 70%, ${0.15 + flap * 0.15})`);
+        ctx.fillStyle = wingGrad;
+        ctx.fill();
+        ctx.restore();
+      });
+
+      ctx.fillStyle = `hsla(${h}, 20%, 94%, 0.9)`;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, size * 0.12, size * 0.45, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    });
+
+    if (thumpScale !== 1) ctx.restore();
+  }
+
+  function drawPetalRing(count, freq, startFrac, endFrac, innerR, maxLen, widthPx, hueBase, alphaBase, senseMul) {
+    const n = freq.length;
+    const startBin = Math.floor(n * startFrac), endBin = Math.floor(n * endFrac);
+    const span = Math.max(endBin - startBin, 1);
+    for (let i = 0; i < count; i++) {
+      const bin = startBin + Math.floor((i / count) * span);
+      const v = (freq[bin] || 0) / 255;
+      const len = innerR + v * maxLen * senseMul;
+      const angle = (i / count) * Math.PI * 2;
+      const x0 = Math.cos(angle) * innerR, y0 = Math.sin(angle) * innerR;
+      const x1 = Math.cos(angle) * len,    y1 = Math.sin(angle) * len;
+      const localHue = hueBase + (i / count) * 30 - 15;
+      const light = 58 + v * 22;
+
+      petalPath(x0, y0, x1, y1, widthPx * (0.4 + v * 0.8));
+      const grad = ctx.createLinearGradient(x0, y0, x1, y1);
+      grad.addColorStop(0, `hsla(${localHue}, 80%, ${light}%, ${alphaBase * 0.5})`);
+      grad.addColorStop(1, `hsla(${localHue + 10}, 85%, ${light + 8}%, ${alphaBase + v * 0.35})`);
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+  }
+
+  // Centered gentle idle flower displayed before music starts
+  function drawIdleBloom(cx, cy, baseR, maxLen) {
+    const idleBreath = Math.sin(t * 1.2) * 0.08;
+    const r = baseR * (1 + idleBreath);
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(t * 0.08);
+
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2;
+      const len = r + maxLen * 0.4 * (1 + Math.sin(t * 2 + i) * 0.1);
+      const x0 = Math.cos(angle) * (r * 0.7);
+      const y0 = Math.sin(angle) * (r * 0.7);
+      const x1 = Math.cos(angle) * len;
+      const y1 = Math.sin(angle) * len;
+      petalPath(x0, y0, x1, y1, 14);
+      ctx.fillStyle = `hsla(${hue + i * 4}, 75%, 68%, 0.35)`;
+      ctx.fill();
+    }
+    ctx.restore();
+
+    const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 1.5);
+    coreGrad.addColorStop(0, `hsla(${hue}, 85%, 75%, 0.85)`);
+    coreGrad.addColorStop(1, `hsla(${hue}, 85%, 60%, 0)`);
+    ctx.fillStyle = coreGrad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  let lastTime = performance.now();
+  function loop(now) {
+    now = now || performance.now();
+    const dt = Math.min((now - lastTime) / 1000, 0.05);
+    lastTime = now;
+    t += dt;
+    try {
+      draw(dt);
+    } catch (error) {
+      // Recover the animation loop if a source changes while a frame is rendering.
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+      console.error('Bloom render frame recovered:', error);
+    }
+    raf = requestAnimationFrame(loop);
+  }
+  loop();
+})();
+</script>
+
+</body>
+</html>
