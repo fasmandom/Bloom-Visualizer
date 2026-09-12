@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Bloom Visualizer Link",
+  "version": "1.0.7",
+  "description": "Connects Bloom to YouTube Music or Spotify metadata.",
+  "permissions": ["tabs", "activeTab", "tabCapture", "offscreen"],
+  "host_permissions": ["https://music.youtube.com/*", "https://open.spotify.com/*", "file:///*"],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "Authorize Bloom Visualizer Link"
+  },
+  "minimum_chrome_version": "116",
+  "content_scripts": [
+    {
+      "matches": ["https://music.youtube.com/*", "https://open.spotify.com/*", "file:///*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
