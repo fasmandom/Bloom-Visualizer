@@ -1,4 +1,4 @@
-const isVisualizer = location.protocol === "file:";
+const isVisualizer = location.protocol === "file:" || location.hostname === "fasmandom.github.io";
 const isSpotify = location.hostname === "open.spotify.com";
 
 function safeSendMessage(message) {
