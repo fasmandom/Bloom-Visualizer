@@ -4,7 +4,12 @@
   "version": "1.0.7",
   "description": "Connects Bloom to YouTube Music or Spotify metadata.",
   "permissions": ["tabs", "activeTab", "tabCapture", "offscreen"],
-  "host_permissions": ["https://music.youtube.com/*", "https://open.spotify.com/*", "file:///*"],
+  "host_permissions": [
+    "https://music.youtube.com/*",
+    "https://open.spotify.com/*",
+    "file:///*",
+    "https://fasmandom.github.io/*"
+  ],
   "background": {
     "service_worker": "service-worker.js"
   },
@@ -14,7 +19,12 @@
   "minimum_chrome_version": "116",
   "content_scripts": [
     {
-      "matches": ["https://music.youtube.com/*", "https://open.spotify.com/*", "file:///*"],
+      "matches": [
+        "https://music.youtube.com/*",
+        "https://open.spotify.com/*",
+        "file:///*",
+        "https://fasmandom.github.io/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
